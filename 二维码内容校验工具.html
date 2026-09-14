@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>二维码校验工具-手机端修复版</title>
+<title>二维码校验工具-手机端修复版（新增清空历史）</title>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 <style>
     * { box-sizing: border-box; font-family: system-ui, sans-serif; }
@@ -30,6 +30,7 @@
     .modal { background: #fff; padding: 20px; border-radius: 10px; max-width: 340px; width: 90%; }
     .red-text { color: red; font-weight: bold; }
     .hidden { display:none; }
+    .history-header {display:flex;justify-content:space-between;align-items:center;}
 </style>
 </head>
 <body>
@@ -87,7 +88,10 @@
     </div>
 
     <div class="row">
-        <label>扫码历史记录</label>
+        <div class="history-header">
+            <label>扫码历史记录</label>
+            <button class="danger" style="width:auto;padding:6px 10px" onclick="clearAllHistory()">清空历史</button>
+        </div>
         <div class="history" id="historyBox"></div>
     </div>
 </div>
@@ -154,6 +158,17 @@ function safeLocalSet(key, value){
         console.error("存储失败",err);
         return false;
     }
+}
+
+// 【新增：清空历史记录函数，带确认弹窗】
+function clearAllHistory(){
+    if(!confirm("确认要清空全部扫码历史记录？此操作不可恢复！")) return;
+    historyList = [];
+    stats = { total: 0, ok: 0, ng: 0, dup: 0 };
+    saveLocal();
+    renderHistory();
+    updateStat();
+    alert("历史记录已全部清空");
 }
 
 // 初始化
