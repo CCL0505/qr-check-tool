@@ -105,6 +105,9 @@
 </div>
 
 <script>
+// ========= 应用版本号（用于比对并自动清本地缓存） =========
+const APP_VERSION = 'v2026-09-14-1';
+
 // ========= 默认规则【完整补全】=========
 const DEFAULT_BUILTIN_CONFIG = {
     password: "123456",
@@ -128,6 +131,23 @@ let voiceReady = false; // 语音权限标记
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+
+// 版本检测：若发生版本变更则自动移除旧的本地存储（避免用户看到旧配置或旧逻辑）
+function checkAppVersionAndClearIfNeeded(){
+    try{
+        const saved = localStorage.getItem('qrAppVersion');
+        if(saved !== APP_VERSION){
+            console.log('App version changed from', saved, 'to', APP_VERSION, '- clearing local cache keys');
+            // 需要清理的本地 key 列表（保守清理与常见使用的 key）
+            const keysToClear = ['qrRules','qrPwd','qrStats','qrHistory','qrCheckConfig','qrScanHistory','qrStat'];
+            keysToClear.forEach(k=>{ try{ localStorage.removeItem(k);}catch(e){} });
+            // 记录当前版本，避免反复清理
+            localStorage.setItem('qrAppVersion', APP_VERSION);
+        }
+    }catch(e){
+        console.warn('版本检测或 localStorage 清理失败', e);
+    }
+}
 
 // 手机端修复语音播报
 function initVoiceAuth() {
@@ -173,6 +193,7 @@ function clearAllHistory(){
 
 // 初始化
 window.onload = function () {
+    checkAppVersionAndClearIfNeeded();
     loadLocalData();
     renderRule();
     renderHistory();
