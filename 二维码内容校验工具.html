@@ -3,12 +3,13 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>二维码校验工具-手机端修复版（新增清空历史）</title>
+<title>二维码校验工具（微信兼容优化）</title>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 <style>
     * { box-sizing: border-box; font-family: system-ui, sans-serif; }
     body { padding: 12px; margin: 0; background: #f5f7fa; }
     .container { max-width: 900px; margin: 0 auto; background: #fff; padding: 16px; border-radius: 10px; box-shadow: 0 1px 4px #0002; }
+    .wechat-tip{background:#fff2cc;color:#b46400;padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid #ffd591;}
     h2 { text-align: center; margin-top: 0; color: #222; }
     .row { margin: 10px 0; }
     label { display: block; margin-bottom: 4px; font-weight: 500; }
@@ -16,10 +17,11 @@
     button { background: #2b78e4; color: #fff; border: none; cursor: pointer; margin-top: 4px; }
     button.danger { background: #dc3545; }
     button.success { background: #28a745; }
+    button.warn{background:#f7b500;color:#111;}
     .video-wrap { position: relative; width: 100%; max-width: 400px; margin: 10px auto; border: 2px solid #666; border-radius: 8px; overflow: hidden; }
     video { width: 100%; display: block; }
     canvas { display: none; }
-    .scan-box { position: absolute; left: 20%; top: 20%; width: 60%; height: 60%; border: 2px dashed #fff; pointer-events: none; }
+    .scan-box { position: absolute; left: 15%; top:15%; width:70%; height:70%; border:2px dashed #fff; pointer-events:none; }
     .result-ok { color: #28a745; font-size: 20px; font-weight: bold; }
     .result-ng { color: #dc3545; font-size: 20px; font-weight: bold; }
     .stat-box { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; margin: 12px 0; }
@@ -31,13 +33,17 @@
     .red-text { color: red; font-weight: bold; }
     .hidden { display:none; }
     .history-header {display:flex;justify-content:space-between;align-items:center;}
+    #fileInput{display:none;}
 </style>
 </head>
 <body>
-
 <div class="container">
-    <h2>二维码校验工具</h2>
+    <!--微信提示块 -->
+    <div class="wechat-tip" id="wechatTip">
+        ⚠提示：微信内置浏览器扫码性能很差，建议点击右上角【...】→<b>在浏览器打开</b>使用；也可以点下方【相册选码】识别图片二维码。
+    </div>
 
+    <h2>二维码校验工具</h2>
     <div class="stat-box">
         <div class="stat-item">总扫描数<br><span id="totalScan">0</span></div>
         <div class="stat-item">合格数<br><span id="okScan">0</span></div>
@@ -59,7 +65,11 @@
             <div class="scan-box"></div>
             <canvas id="canvas"></canvas>
         </div>
-        <button id="startBtn" onclick="toggleCamera()">开启摄像头</button>
+        <div class="row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <button id="startBtn" onclick="toggleCamera()">开启摄像头</button>
+            <button class="warn" onclick="document.getElementById('fileInput').click()">相册选码</button>
+        </div>
+        <input type="file" id="fileInput" accept="image/*" onchange="decodeImageFile(event)">
     </div>
 
     <div class="row">
@@ -78,7 +88,6 @@
             </div>
             <div id="ruleList"></div>
             <button id="addRuleBtn" onclick="addRule()">新增规则字段</button>
-
             <div class="row" id="pwdArea" style="display:none">
                 <label>修改密码</label>
                 <input type="password" id="newPwd" />
@@ -105,6 +114,14 @@
 </div>
 
 <script>
+//检测是否微信浏览器
+function isWeChatBrowser(){
+    return /MicroMessenger/i.test(navigator.userAgent);
+}
+if(!isWeChatBrowser()){
+    document.getElementById("wechatTip").style.display="none";
+}
+
 // ========= 默认规则【完整补全】=========
 const DEFAULT_BUILTIN_CONFIG = {
     password: "123456",
@@ -116,20 +133,19 @@ const DEFAULT_BUILTIN_CONFIG = {
         { mode: "length", len: 4, value: "" }
     ]
 };
-
 let lockPassword = "123456";
 let ruleLocked = true;
 let stats = { total: 0, ok: 0, ng: 0, dup: 0 };
 let historyList = [];
 let cameraOn = false;
 let scanLoop = null;
-let voiceReady = false; // 语音权限标记
-
+let voiceReady = false;
+let lastScanCode = "";
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
-// 手机端修复语音播报
+// 语音播报
 function initVoiceAuth() {
     if(voiceReady) return;
     try{
@@ -138,7 +154,6 @@ function initVoiceAuth() {
         voiceReady = true;
     }catch(e){}
 }
-
 function speakText(text) {
     if (!('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
@@ -149,7 +164,7 @@ function speakText(text) {
     window.speechSynthesis.speak(utterance);
 }
 
-// 安全保存本地存储，增加异常捕获，修复手机无法写入历史
+//安全存储
 function safeLocalSet(key, value){
     try{
         localStorage.setItem(key, value);
@@ -160,7 +175,7 @@ function safeLocalSet(key, value){
     }
 }
 
-// 【新增：清空历史记录函数，带确认弹窗】
+//清空历史
 function clearAllHistory(){
     if(!confirm("确认要清空全部扫码历史记录？此操作不可恢复！")) return;
     historyList = [];
@@ -171,7 +186,6 @@ function clearAllHistory(){
     alert("历史记录已全部清空");
 }
 
-// 初始化
 window.onload = function () {
     loadLocalData();
     renderRule();
@@ -180,7 +194,6 @@ window.onload = function () {
     bindModalEvent();
 };
 
-// 弹窗事件委托
 function bindModalEvent() {
     const mask = document.getElementById("alertMask");
     mask.addEventListener("click", function (e) {
@@ -189,24 +202,20 @@ function bindModalEvent() {
     document.getElementById("alertCloseBtn").addEventListener("click", closeAlert);
 }
 
-// 加载本地数据：本地无规则时加载上面默认规则
 function loadLocalData() {
     const savedRules = localStorage.getItem("qrRules");
     const savedPwd = localStorage.getItem("qrPwd");
     const savedStats = localStorage.getItem("qrStats");
     const savedHistory = localStorage.getItem("qrHistory");
-
     if (!savedRules) {
         safeLocalSet("qrRules", JSON.stringify(DEFAULT_BUILTIN_CONFIG.rules));
     }
-
     if (savedPwd) {
         lockPassword = savedPwd;
     } else {
         lockPassword = DEFAULT_BUILTIN_CONFIG.password;
         safeLocalSet("qrPwd", lockPassword);
     }
-
     if (savedStats) stats = JSON.parse(savedStats);
     if (savedHistory) historyList = JSON.parse(savedHistory);
 }
@@ -234,7 +243,6 @@ function renderRule() {
     const wrap = document.getElementById("ruleList");
     wrap.innerHTML = "";
     const rules = JSON.parse(localStorage.getItem("qrRules"));
-
     rules.forEach((r, idx) => {
         const div = document.createElement("div");
         div.className = "rule-item";
@@ -249,7 +257,6 @@ function renderRule() {
         `;
         wrap.appendChild(div);
     });
-
     setRuleEdit(ruleLocked);
 }
 
@@ -260,21 +267,17 @@ function addRule() {
     renderRule();
 }
 
-// 锁定控制：锁定后，输入框、下拉、删除按钮、新增按钮全部禁用
 function setRuleEdit(lock) {
     ruleLocked = lock;
     const inputs = document.querySelectorAll("#ruleList input, #ruleList select");
     const delBtns = document.querySelectorAll(".del-btn");
     const addBtn = document.getElementById("addRuleBtn");
-
     inputs.forEach(i => i.disabled = lock);
     delBtns.forEach(btn => btn.disabled = lock);
     addBtn.disabled = lock;
-
     document.getElementById("pwdArea").style.display = lock ? "none" : "block";
 }
 
-// 解锁校验密码
 function lockRule() {
     if (ruleLocked) {
         const p = prompt("请输入解锁密码");
@@ -292,22 +295,17 @@ function lockRule() {
 
 function savePwd() {
     const newP = document.getElementById("newPwd").value.trim();
-    if (!newP) {
-        alert("密码不能为空");
-        return;
-    }
+    if (!newP) { alert("密码不能为空"); return; }
     lockPassword = newP;
     saveLocal();
     alert("密码修改成功");
 }
 
-// 摄像头控制，点击时初始化语音权限
+//摄像头
 function toggleCamera() {
-    initVoiceAuth(); //点击开启摄像头，激活语音（手机关键修复）
-    if (cameraOn) {
-        stopCamera();
-        return;
-    }
+    initVoiceAuth();
+    lastScanCode = "";
+    if (cameraOn) { stopCamera(); return; }
     startCamera();
 }
 
@@ -315,25 +313,19 @@ async function startCamera() {
     try {
         cameraOn = true;
         document.getElementById("startBtn").innerText = "关闭摄像头";
-
+        //微信环境降低分辨率，减轻解码压力
+        const idealW = isWeChatBrowser() ? 480 :720;
         const stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: "environment",
-                width: { ideal: 480 },
-                height: { ideal: 480 }
-            }
+            video: { facingMode: "environment", width:{ideal:idealW}, height:{ideal:idealW} }
         });
-
         video.srcObject = stream;
         await video.play();
-
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
-
         if (scanLoop) clearInterval(scanLoop);
-        scanLoop = setInterval(scanFrame, 220);
+        scanLoop = setInterval(scanFrame, isWeChatBrowser()?280:140);
     } catch (err) {
-        alert("无法打开摄像头，请授予相机权限");
+        alert("无法打开摄像头！微信环境建议使用右上角「在浏览器打开」，或使用相册选码");
         cameraOn = false;
     }
 }
@@ -341,30 +333,43 @@ async function startCamera() {
 function stopCamera() {
     cameraOn = false;
     document.getElementById("startBtn").innerText = "开启摄像头";
-
-    if (scanLoop) {
-        clearInterval(scanLoop);
-        scanLoop = null;
-    }
-
-    if (video.srcObject) {
-        video.srcObject.getTracks().forEach(t => t.stop());
-    }
+    if (scanLoop) { clearInterval(scanLoop); scanLoop = null; }
+    if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
 }
 
 function scanFrame() {
     if (!cameraOn) return;
-
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const code = jsQR(imgData.data, imgData.width, imgData.height);
-
+    const code = jsQR(imgData.data, imgData.width, imgData.height, {tryHarder:true});
     if (code) {
+        if(lastScanCode === code.data) return;
+        lastScanCode = code.data;
         handleScanResult(code.data);
     }
 }
 
-// 扫码结果处理：仅常规模式，扫码后关闭摄像头
+//相册图片解码（微信备选）
+function decodeImageFile(e){
+    const file = e.target.files[0];
+    if(!file) return;
+    const img=new Image();
+    img.onload=()=>{
+        canvas.width=img.width;
+        canvas.height=img.height;
+        ctx.drawImage(img,0,0);
+        const imgData=ctx.getImageData(0,0,canvas.width,canvas.height);
+        const res=jsQR(imgData.data,imgData.width,imgData.height,{tryHarder:true});
+        if(res){
+            handleScanResult(res.data);
+        }else{
+            alert("图片中未识别到二维码");
+        }
+        e.target.value="";
+    };
+    img.src=URL.createObjectURL(file);
+}
+
 function handleScanResult(content) {
     stopCamera();
     checkQrContent(content);
@@ -374,35 +379,28 @@ function handleScanResult(content) {
 function manualCheck() {
     const val = document.getElementById("qrInput").value.trim();
     if (!val) return;
-    initVoiceAuth(); //手动校验也激活语音
+    initVoiceAuth();
     checkQrContent(val);
     document.getElementById("qrInput").value = "";
 }
 
-// 校验核心
 function checkQrContent(content) {
     document.getElementById("currentQr").innerText = content;
     document.getElementById("checkResult").innerHTML = "";
     stats.total++;
-
     const isDup = historyList.some(h => h.content === content);
-
     if (isDup) {
-        stats.dup++;
-        stats.ng++;
-        saveLocal();
-        updateStat();
+        stats.dup++; stats.ng++;
+        saveLocal(); updateStat();
         showAlert("重码报警", "该二维码已存在历史记录，禁止重复扫码");
         speakText("扫码不合格");
         addHistory(content, false, true);
         return;
     }
-
     const rules = JSON.parse(localStorage.getItem("qrRules"));
     let pass = true;
     let showHtml = content;
     let pos = 0;
-
     for (const rule of rules) {
         const len = Number(rule.len);
         if (pos + len > content.length) {
@@ -410,9 +408,7 @@ function checkQrContent(content) {
             showHtml = insertRed(content, pos, content.length - pos);
             break;
         }
-
         const seg = content.substr(pos, len);
-
         if (rule.mode === "fixed") {
             if (seg !== rule.value) {
                 pass = false;
@@ -426,10 +422,8 @@ function checkQrContent(content) {
                 break;
             }
         }
-
         pos += len;
     }
-
     if (pass) {
         document.getElementById("checkResult").innerHTML = `<span class="result-ok">合格</span>`;
         stats.ok++;
@@ -442,9 +436,7 @@ function checkQrContent(content) {
         speakText("扫码不合格");
         addHistory(content, false, false);
     }
-
-    saveLocal();
-    updateStat();
+    saveLocal(); updateStat();
 }
 
 function insertRed(str, start, length) {
@@ -455,25 +447,16 @@ function insertRed(str, start, length) {
 }
 
 function addHistory(content, ok, dup) {
-    historyList.unshift({
-        content,
-        time: new Date().toLocaleString(),
-        ok,
-        dup
-    });
+    historyList.unshift({ content, time: new Date().toLocaleString(), ok, dup });
     renderHistory();
-    saveLocal(); //新增历史后立刻强制保存
+    saveLocal();
 }
 
 function renderHistory() {
     const box = document.getElementById("historyBox");
     box.innerHTML = "";
     historyList.forEach(h => {
-        const sp = h.ok
-            ? `<span class="result-ok">合格</span>`
-            : h.dup
-                ? `<span class="result-ng">重码</span>`
-                : `<span class="result-ng">不合格</span>`;
+        const sp = h.ok ? `<span class="result-ok">合格</span>` : h.dup ? `<span class="result-ng">重码</span>` : `<span class="result-ng">不合格</span>`;
         box.innerHTML += `<div>${h.time} | ${h.content} | ${sp}</div>`;
     });
 }
@@ -483,26 +466,19 @@ function updateStat() {
     document.getElementById("okScan").innerText = stats.ok;
     document.getElementById("ngScan").innerText = stats.ng;
     document.getElementById("dupScan").innerText = stats.dup;
-
     const denominator = stats.total - stats.ng;
-    const rate = denominator > 0
-        ? ((stats.ok / denominator) * 100).toFixed(2) + "%"
-        : "0.00%";
-
+    const rate = denominator >0 ? ((stats.ok / denominator)*100).toFixed(2)+"%" : "0.00%";
     document.getElementById("rate").innerText = rate;
 }
 
-// 弹窗
 function showAlert(title, msg) {
     document.getElementById("alertTitle").innerText = title;
     document.getElementById("alertMsg").innerText = msg;
     document.getElementById("alertMask").style.display = "flex";
 }
-
 function closeAlert() {
     document.getElementById("alertMask").style.display = "none";
 }
 </script>
-
 </body>
 </html>
